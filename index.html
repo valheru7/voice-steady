@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Steady: a pitch and resonance reminder for voice practice</title>
+<style>
+  :root {
+    --bg: #170b3d; --panel: #2a1764; --text: #f4ecff; --muted: #b9a8e0;
+    --good: #5fe39a; --gray: #ffe66b; --low: #ff7ad9; --line: #4b2a8f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 16px; color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+           padding: 14px 16px; margin-bottom: 14px; }
+  .big { display: flex; gap: 24px; align-items: baseline; flex-wrap: wrap; }
+  .big div { min-width: 140px; }
+  .big .num { font-size: 44px; font-weight: 800; }
+  .big .minor { opacity: .6; }
+  .big .minor .num { font-size: 24px; }
+  .big .lbl { color: var(--muted); font-size: 13px; }
+  #dot { width: 18px; height: 18px; border-radius: 50%; display: inline-block;
+         background: #555; vertical-align: middle; margin-right: 8px; }
+  canvas { width: 100%; height: 160px; display: block; background: #12082f; border-radius: 8px; }
+  label { display: block; margin: 10px 0 2px; font-weight: 600; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type=range] { flex: 1; min-width: 180px; }
+  .val { min-width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+  select, button, input[type=file] { font: inherit; color: var(--text); background: #3a2287;
+         border: 1px solid #6a4bc4; border-radius: 8px; padding: 6px 10px; }
+  button { cursor: pointer; font-weight: 700; }
+  button.primary { background: #ff7ad9; color: #170b3d; border-color: #ff7ad9; }
+  .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+  #meter { height: 8px; background: #12082f; border-radius: 4px; overflow: hidden; flex: 1; }
+  #meterFill { height: 100%; width: 0; background: var(--good); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Steady</h1>
+  <p class="sub">Plays your cue in your headphones when your voice stays low for a while. Keep this tab open while streaming; it works in the background.</p>
+
+  <div class="panel">
+    <div class="row">
+      <button id="startBtn" class="primary">Start listening</button>
+      <button id="pauseBtn" disabled>Pause</button>
+      <button id="testBtn">Test cue</button>
+      <span id="status"><span id="dot"></span><span id="statusText">Stopped</span></span>
+    </div>
+  </div>
+
+  <div class="panel big">
+    <div><div class="num" id="medHz">–</div><div class="lbl">recent median pitch (Hz)</div></div>
+    <div><div class="num" id="medF2">–</div><div class="lbl">recent median resonance, F2 (Hz)</div></div>
+    <div><div class="num" id="inRange">–</div><div class="lbl">pitch in range, this session</div></div>
+    <div><div class="num" id="cues">0</div><div class="lbl">cues played</div></div>
+    <div class="minor"><div class="num" id="nowHz">–</div><div class="lbl">pitch right now (Hz)</div></div>
+  </div>
+
+  <div class="panel">
+    <canvas id="chart" width="1400" height="320"></canvas>
+    <p class="hint">Last 2 minutes. Dots are your pitch while talking; the dashed line is your threshold.</p>
+    <canvas id="chart2" width="1400" height="320"></canvas>
+    <p class="hint">Resonance (F2) while talking. Higher means a brighter, more forward sound. It's rougher than pitch and changes with your mic and with the vowel, so compare it with your own normal voice, not with a fixed number.</p>
+  </div>
+
+  <div class="panel">
+    <label for="threshold">Threshold</label>
+    <div class="row"><input id="threshold" type="range" min="110" max="200" step="1"><span class="val" id="thresholdVal"></span></div>
+    <p class="hint">Cue when your recent median is below this. Record yourself first (see the README) to pick a number that suits your own voice.</p>
+
+    <label for="resGoal">Resonance goal (F2)</label>
+    <div class="row"><input id="resGoal" type="range" min="1300" max="2100" step="10"><span class="val" id="resGoalVal"></span></div>
+    <p class="hint">Only colors the resonance number (green at or above it, yellow within 100 Hz, pink below). It never plays a cue. Pick a number between your normal voice and your target voice.</p>
+
+    <label for="need">Talking time before it judges</label>
+    <div class="row"><input id="need" type="range" min="3" max="20" step="1"><span class="val" id="needVal"></span></div>
+    <p class="hint">Seconds of actual talking (silence doesn't count) within the last 30 seconds.</p>
+
+    <label for="cooldown">Cooldown after a cue</label>
+    <div class="row"><input id="cooldown" type="range" min="30" max="600" step="10"><span class="val" id="cooldownVal"></span></div>
+
+    <label for="gate">Mic sensitivity (ignore sounds quieter than this)</label>
+    <div class="row"><input id="gate" type="range" min="1" max="60" step="1"><span class="val" id="gateVal"></span></div>
+    <div class="row"><div id="meter"><div id="meterFill"></div></div></div>
+    <p class="hint">The bar is your mic level. Set it so your talking lights it up but background noise doesn't.</p>
+  </div>
+
+  <div class="panel">
+    <label for="micSel">Microphone</label>
+    <select id="micSel"></select>
+    <label for="outSel">Play the cue on</label>
+    <select id="outSel"></select>
+    <button id="pickSpeakerBtn" type="button">Choose a speaker…</button>
+    <p class="hint" id="deviceCount"></p>
+    <p class="hint">Pick your headphones. If only one speaker is listed, Chrome is hiding the rest: in Windows, Settings > System > Sound > Volume mixer, set this browser's output to your headphones. OBS only captures specific apps, so as long as this browser isn't one of them, viewers won't hear it.</p>
+
+    <label>Cue sound</label>
+    <div class="row">
+      <button id="recBtn">Record my own (2 s)</button>
+      <input id="fileIn" type="file" accept="audio/*">
+      <button id="resetCueBtn">Use the default chime</button>
+    </div>
+    <p class="hint" id="cueName"></p>
+  </div>
+  <div class="panel">
+    <label>Record my mic</label>
+    <div class="row">
+      <button id="recFolderBtn">Choose folder &amp; record</button>
+      <button id="recStopBtn" disabled>Stop recording</button>
+      <span class="val" id="recStatus">Not recording</span>
+    </div>
+    <p class="hint">Saves only your mic (no game audio) as 5-minute files in the folder you pick, so voice analysis hears just you. About 10-15 MB per hour. If the tab crashes you lose at most the last 5 minutes. Needs Chrome or Edge.</p>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- settings
+
+const DEFAULTS = { threshold: 150, resGoal: 1650, need: 8, cooldown: 150, gate: 12, mic: "", out: "", cue: "" };
+const WINDOW_SECONDS = 30;       // how far back "recent" looks
+const CHART_SECONDS = 120;
+const MIN_HZ = 75, MAX_HZ = 400; // speaking range we accept as voice
+// A soft two-note chime built in code, so no audio file ships with the tool.
+function makeChime() {
+  const rate = 22050, notes = [[660, 0, 0.35], [880, 0.2, 0.5]]; // [Hz, start s, length s]
+  const samples = new Int16Array(Math.floor(rate * 0.75));
+  for (const [hz, start, length] of notes) {
+    for (let i = 0; i < length * rate; i++) {
+      const t = i / rate;
+      const fade = Math.min(1, t / 0.01) * Math.exp(-4 * t / length);
+      const n = Math.floor(start * rate) + i;
+      samples[n] += Math.sin(2 * Math.PI * hz * t) * fade * 9000;
+    }
+  }
+  const header = new DataView(new ArrayBuffer(44));
+  const text = (at, str) => [...str].forEach((c, k) => header.setUint8(at + k, c.charCodeAt(0)));
+  text(0, "RIFF"); header.setUint32(4, 36 + samples.length * 2, true); text(8, "WAVEfmt ");
+  header.setUint32(16, 16, true); header.setUint16(20, 1, true); header.setUint16(22, 1, true);
+  header.setUint32(24, rate, true); header.setUint32(28, rate * 2, true);
+  header.setUint16(32, 2, true); header.setUint16(34, 16, true); text(36, "data");
+  header.setUint32(40, samples.length * 2, true);
+  return URL.createObjectURL(new Blob([header, samples], { type: "audio/wav" }));
+}
+const DEFAULT_CUE = makeChime();
+
+function loadSettings() {
+  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem("voiceSteady") || "{}") }; }
+  catch { return { ...DEFAULTS }; }
+}
+function saveSettings() {
+  try { localStorage.setItem("voiceSteady", JSON.stringify(settings)); } catch { /* private window */ }
+}
+const settings = loadSettings();
+
+// ---------------------------------------------------------------- pitch (YIN)
+
+// Returns { hz, clarity } or null. clarity is 1 - the YIN dip; higher is a cleaner voice.
+function detectPitch(buf, sampleRate) {
+  const minTau = Math.floor(sampleRate / MAX_HZ);
+  const maxTau = Math.min(Math.floor(sampleRate / MIN_HZ), Math.floor(buf.length / 2));
+  const d = new Float32Array(maxTau + 1);
+  for (let tau = 1; tau <= maxTau; tau++) {
+    let sum = 0;
+    for (let i = 0; i < buf.length - maxTau; i++) {
+      const diff = buf[i] - buf[i + tau];
+      sum += diff * diff;
+    }
+    d[tau] = sum;
+  }
+  // Cumulative mean normalized difference.
+  let running = 0;
+  d[0] = 1;
+  for (let tau = 1; tau <= maxTau; tau++) {
+    running += d[tau];
+    d[tau] = running === 0 ? 1 : d[tau] * tau / running;
+  }
+  for (let tau = minTau; tau <= maxTau; tau++) {
+    if (d[tau] >= 0.15) continue;
+    while (tau + 1 <= maxTau && d[tau + 1] < d[tau]) tau++;
+    // Parabolic interpolation around the dip for a finer estimate.
+    const a = d[tau - 1], b = d[tau], c = tau + 1 <= maxTau ? d[tau + 1] : b;
+    const shift = (a - 2 * b + c) === 0 ? 0 : (a - c) / (2 * (a - 2 * b + c));
+    return { hz: sampleRate / (tau + shift), clarity: 1 - b };
+  }
+  return null;
+}
+
+function median(values) {
+  const s = [...values].sort((x, y) => x - y);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// ---------------------------------------------------------------- state
+
+let audioCtx = null, micStream = null, workletNode = null;
+let paused = false;
+let frames = [];          // { t, hz } voiced frames in the recent window
+let chartPoints = [];     // { t, hz } for drawing
+let lastCueAt = -Infinity;
+let cueCount = 0;
+let voicedTotal = 0, voicedInRange = 0;
+let frameSeconds = 0;
+let smoothedHz = null;
+
+const cueAudio = new Audio();
+
+// Formant estimate: LPC by autocorrelation, roots by Durand-Kerner. Same code as tools/formants.js.
+
+function resample(samples, fromRate, toRate) {
+  // Average blocks, a crude low-pass, then pick. Fine for speech below the 5.5 kHz ceiling.
+  const ratio = fromRate / toRate;
+  const out = new Float32Array(Math.floor(samples.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const a = Math.floor(i * ratio), b = Math.max(a + 1, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let k = a; k < b; k++) sum += samples[k];
+    out[i] = sum / (b - a);
+  }
+  return out;
+}
+
+function lpcCoefficients(frame, order) {
+  const n = frame.length;
+  const r = new Float64Array(order + 1);
+  for (let lag = 0; lag <= order; lag++) {
+    let sum = 0;
+    for (let i = 0; i + lag < n; i++) sum += frame[i] * frame[i + lag];
+    r[lag] = sum;
+  }
+  if (r[0] <= 0) return null;
+  r[0] *= 1.0001; // tiny white-noise correction keeps the filter stable
+  const a = new Float64Array(order + 1); a[0] = 1;
+  let error = r[0];
+  for (let i = 1; i <= order; i++) {
+    let acc = r[i];
+    for (let j = 1; j < i; j++) acc += a[j] * r[i - j];
+    const k = -acc / error;
+    const next = a.slice();
+    for (let j = 1; j < i; j++) next[j] = a[j] + k * a[i - j];
+    next[i] = k;
+    a.set(next);
+    error *= 1 - k * k;
+    if (error <= 0) return null;
+  }
+  return a;
+}
+
+// Roots of 1 + a1 z^-1 + ... + ap z^-p, i.e. z^p + a1 z^(p-1) + ... + ap.
+function polynomialRoots(a) {
+  const p = a.length - 1;
+  const re = new Float64Array(p), im = new Float64Array(p);
+  for (let i = 0; i < p; i++) { // start on a circle, not on the real axis
+    const angle = 2 * Math.PI * i / p + 0.4;
+    re[i] = 0.9 * Math.cos(angle); im[i] = 0.9 * Math.sin(angle);
+  }
+  for (let iter = 0; iter < 100; iter++) {
+    let moved = 0;
+    for (let i = 0; i < p; i++) {
+      // Evaluate polynomial at root i
+      let pr = 1, pi = 0;
+      for (let k = 1; k <= p; k++) {
+        const nr = pr * re[i] - pi * im[i] + a[k];
+        pi = pr * im[i] + pi * re[i]; pr = nr;
+      }
+      let dr = 1, di = 0;
+      for (let j = 0; j < p; j++) {
+        if (j === i) continue;
+        const xr = re[i] - re[j], xi = im[i] - im[j];
+        const nr = dr * xr - di * xi; di = dr * xi + di * xr; dr = nr;
+      }
+      const den = dr * dr + di * di;
+      if (den === 0) continue;
+      const stepR = (pr * dr + pi * di) / den, stepI = (pi * dr - pr * di) / den;
+      re[i] -= stepR; im[i] -= stepI;
+      moved = Math.max(moved, Math.abs(stepR) + Math.abs(stepI));
+    }
+    if (moved < 1e-9) break;
+  }
+  return { re, im };
+}
+
+// Returns [F1, F2, F3] in Hz for one frame sampled at `rate`, or null.
+function frameFormants(frame, rate, order) {
+  const windowed = new Float64Array(frame.length);
+  for (let i = 0; i < frame.length; i++) {
+    const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (frame.length - 1));
+    windowed[i] = (i ? frame[i] - 0.97 * frame[i - 1] : frame[i]) * w;
+  }
+  const a = lpcCoefficients(windowed, order);
+  if (!a) return null;
+  const { re, im } = polynomialRoots(a);
+  const found = [];
+  for (let i = 0; i < re.length; i++) {
+    if (im[i] <= 0) continue;
+    const hz = Math.atan2(im[i], re[i]) * rate / (2 * Math.PI);
+    const bandwidth = -Math.log(Math.hypot(re[i], im[i])) * rate / Math.PI;
+    if (hz > 90 && hz < rate / 2 - 100 && bandwidth < 700) found.push(hz);
+  }
+  found.sort((x, y) => x - y);
+  return found.length >= 3 ? found.slice(0, 3) : null;
+}
+
+
+// ---------------------------------------------------------------- resonance (F2)
+
+const FORMANT_CEILING_HZ = 5000, FORMANT_ORDER = 12; // tuned against Praat on recordings (see README)
+const MIN_RESONANCE_FRAMES = 10;
+let formantFrames = [];   // { t, f1, f2, f3 } from loud, voiced frames
+let recentLevels = [];    // mic levels of recent voiced frames, to find the loud ones
+
+// Vowels move F2 around a lot, so only the loudest 40% of voiced frames count and the readout is a median.
+function trackResonance(buf, now, level) {
+  recentLevels.push(level);
+  if (recentLevels.length > 200) recentLevels.shift();
+  const loudCutoff = recentLevels.length < 20 ? 0 : [...recentLevels].sort((a, b) => a - b)[Math.floor(recentLevels.length * 0.6)];
+  if (level < loudCutoff) return;
+  const rate = 2 * FORMANT_CEILING_HZ;
+  const low = resample(buf, audioCtx.sampleRate, rate);
+  const mid = Math.floor(low.length / 2), half = Math.floor(0.0125 * rate); // the middle 25 ms
+  const found = frameFormants(low.subarray(mid - half, mid + half), rate, FORMANT_ORDER);
+  if (found) formantFrames.push({ t: now, f1: found[0], f2: found[1], f3: found[2] });
+}
+
+// The worklet just collects 2048-sample windows (hop 1024) and posts them to the page.
+// Audio-thread messages keep arriving when the tab is in the background, unlike timers.
+const WORKLET = `
+class Collector extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(2048); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      this.buf[this.n++] = ch[i];
+      if (this.n === 2048) {
+        this.port.postMessage(this.buf.slice());
+        this.buf.copyWithin(0, 1024);
+        this.n = 1024;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("collector", Collector);
+`;
+
+// ---------------------------------------------------------------- mic recording
+
+const SEGMENT_MS = 5 * 60 * 1000; // a crash loses at most one segment, because a file is only written when it ends
+const RECORD_MIME = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+let recordDir = null;   // folder she picked
+let recording = false;  // she wants recording on
+let segment = null;     // { recorder, chunks, startedAt, timer } for the file being recorded
+let savedSegments = 0;
+
+function setRecStatus(text) { document.getElementById("recStatus").textContent = text; }
+
+function startSegment() {
+  if (!recording || !recordDir || !micStream || segment) return;
+  const recorder = new MediaRecorder(micStream, { mimeType: RECORD_MIME, audioBitsPerSecond: 32000 });
+  const chunks = [];
+  recorder.ondataavailable = (e) => chunks.push(e.data);
+  recorder.start(10000);
+  segment = { recorder, chunks, startedAt: new Date(), timer: setTimeout(rollSegment, SEGMENT_MS) };
+  setRecStatus(`Recording to ${recordDir.name}, ${savedSegments} file(s) saved`);
+}
+
+function endSegment() {
+  if (!segment) return Promise.resolve();
+  const { recorder, chunks, startedAt, timer } = segment;
+  segment = null;
+  clearTimeout(timer);
+  return new Promise((resolve) => {
+    recorder.onstop = async () => { await saveSegment(chunks, startedAt, recorder.mimeType); resolve(); };
+    recorder.stop();
+  });
+}
+
+async function rollSegment() {
+  await endSegment();
+  startSegment();
+}
+
+async function saveSegment(chunks, startedAt, mimeType) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}_` +
+    `${pad(startedAt.getHours())}-${pad(startedAt.getMinutes())}-${pad(startedAt.getSeconds())}`;
+  try {
+    const file = await recordDir.getFileHandle(`voice-${stamp}.webm`, { create: true });
+    const writer = await file.createWritable();
+    await writer.write(new Blob(chunks, { type: mimeType }));
+    await writer.close();
+    savedSegments++;
+    setRecStatus(`${recording ? "Recording to" : "Stopped, saved in"} ${recordDir.name}, ${savedSegments} file(s) saved`);
+  } catch (err) {
+    setRecStatus("Could not save: " + err.message);
+  }
+}
+
+async function chooseFolderAndRecord() {
+  if (!window.showDirectoryPicker) { setRecStatus("This browser can't save to a folder. Use Chrome or Edge."); return; }
+  try {
+    recordDir = await showDirectoryPicker({ id: "voice-steady", mode: "readwrite" });
+  } catch { return; } // she closed the picker
+  recording = true;
+  document.getElementById("recStopBtn").disabled = false;
+  if (micStream) startSegment();
+  else setRecStatus(`Will record to ${recordDir.name} once you press Start listening`);
+}
+
+async function stopRecording() {
+  recording = false;
+  document.getElementById("recStopBtn").disabled = true;
+  await endSegment();
+  setRecStatus(savedSegments ? `Stopped, ${savedSegments} file(s) saved` : "Not recording");
+}
+
+// ---------------------------------------------------------------- audio
+
+// A page opened straight from a file has an opaque origin, and Chrome refuses blob: URLs there
+// ("failed to load worklet module"). A data: URL works in both cases.
+async function loadWorklet(context) {
+  const url = "data:application/javascript;charset=utf-8," + encodeURIComponent(WORKLET);
+  await context.audioWorklet.addModule(url);
+}
+
+async function start() {
+  errorShownAt = 0; // a fresh attempt should show its own status
+  if (audioCtx) await stop();
+  const constraints = {
+    audio: {
+      deviceId: settings.mic ? { exact: settings.mic } : undefined,
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+    },
+  };
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    // A saved mic that is unplugged or renamed fails as "exact"; try the system default before giving up.
+    if (err.name !== "OverconstrainedError" || !settings.mic) {
+      setStatus("#ff5a5a", `Mic blocked (${err.name}): ${err.message}`);
+      return;
+    }
+    settings.mic = "";
+    saveSettings();
+    return start();
+  }
+  audioCtx = new AudioContext();
+  await loadWorklet(audioCtx);
+  workletNode = new AudioWorkletNode(audioCtx, "collector");
+  workletNode.port.onmessage = (e) => onWindow(e.data);
+  audioCtx.createMediaStreamSource(micStream).connect(workletNode);
+  frameSeconds = 1024 / audioCtx.sampleRate;
+  startSegment();
+
+  await fillDeviceLists();
+  paused = false;
+  document.getElementById("pauseBtn").disabled = false;
+  document.getElementById("pauseBtn").textContent = "Pause";
+  document.getElementById("startBtn").textContent = "Restart";
+  setStatus("#5fe39a", "Listening");
+}
+
+async function stop() {
+  await endSegment(); // save what was recorded before the mic goes away
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (audioCtx) await audioCtx.close();
+  audioCtx = null; micStream = null; workletNode = null;
+}
+
+// Why the cue may not fire, shown in the status line.
+let lastLevel = 0;
+let lastUnclearAt = -Infinity;
+
+function onWindow(buf) {
+  let sumSq = 0;
+  for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+  const level = Math.sqrt(sumSq / buf.length) * 1000; // roughly 0..300 for speech
+  document.getElementById("meterFill").style.width = Math.min(100, level / 1.5) + "%";
+  document.getElementById("meterFill").style.background = level >= settings.gate ? "var(--good)" : "#6a4bc4";
+
+  const now = audioCtx.currentTime;
+  lastLevel = level;
+  if (paused || level < settings.gate) return;
+
+  const p = detectPitch(buf, audioCtx.sampleRate);
+  if (!p || p.clarity < 0.8) { lastUnclearAt = audioCtx.currentTime; return; }
+
+  frames.push({ t: now, hz: p.hz });
+  chartPoints.push({ t: now, hz: p.hz });
+  voicedTotal++;
+  if (p.hz >= settings.threshold) voicedInRange++;
+  smoothedHz = smoothedHz === null ? p.hz : smoothedHz * 0.85 + p.hz * 0.15;
+  trackResonance(buf, now, level);
+  checkForCue(now);
+}
+
+function checkForCue(now) {
+  frames = frames.filter((f) => now - f.t <= WINDOW_SECONDS);
+  const talkingSeconds = frames.length * frameSeconds;
+  if (talkingSeconds < settings.need) return;
+  if (now - lastCueAt < settings.cooldown) return;
+  if (median(frames.map((f) => f.hz)) >= settings.threshold) return;
+
+  lastCueAt = now;
+  frames = [];
+  playCue();
+}
+
+function playCue({ counts = true } = {}) {
+  if (counts) {
+    cueCount++;
+    document.getElementById("cues").textContent = cueCount;
+  }
+  cueAudio.currentTime = 0;
+  cueAudio.play().catch((err) => setStatus("#ff5a5a", "Couldn't play cue: " + err.message));
+}
+
+// ---------------------------------------------------------------- UI
+
+// The meter rewrites the status every 250 ms, so an error would vanish almost at once.
+// Keep errors on screen for a while.
+const ERROR_COLOR = "#ff5a5a";
+const ERROR_HOLD_MS = 20000;
+let errorShownAt = 0;
+
+function setStatus(color, text) {
+  const routine = color !== ERROR_COLOR && text !== "Paused";
+  if (routine && Date.now() - errorShownAt < ERROR_HOLD_MS) return;
+  if (color === ERROR_COLOR) { errorShownAt = Date.now(); console.error(text); }
+  document.getElementById("dot").style.background = color;
+  document.getElementById("statusText").textContent = text;
+}
+
+function listeningText(now) {
+  const recent = frames.filter((f) => now - f.t <= WINDOW_SECONDS);
+  const voiced = recent.length * frameSeconds;
+  if (voiced >= settings.need) return `Listening: ${Math.round(voiced)} s of voice, waiting for your pitch to dip below ${settings.threshold} Hz`;
+  if (voiced > 0) return `Listening: ${Math.round(voiced)} of ${settings.need} s of voice heard`;
+  if (now - lastUnclearAt < 3) return "Hearing sound but can't find a pitch (very low or breathy voice, or noise)";
+  if (lastLevel > 0 && lastLevel < settings.gate) return `Too quiet: level ${Math.round(lastLevel)} is under the gate ${settings.gate}. Lower the gate.`;
+  return "Listening";
+}
+
+function refreshNumbers() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const recent = frames.filter((f) => now - f.t <= WINDOW_SECONDS);
+  const med = recent.length ? median(recent.map((f) => f.hz)) : null;
+  document.getElementById("nowHz").textContent = smoothedHz ? Math.round(smoothedHz) : "–";
+  const medEl = document.getElementById("medHz");
+  medEl.textContent = med ? Math.round(med) : "–";
+  medEl.style.color = !med ? "" : med >= settings.threshold ? "var(--good)" : med >= settings.threshold - 10 ? "var(--gray)" : "var(--low)";
+  formantFrames = formantFrames.filter((f) => now - f.t <= CHART_SECONDS);
+  const recentF2 = formantFrames.filter((f) => now - f.t <= WINDOW_SECONDS).map((f) => f.f2);
+  const f2El = document.getElementById("medF2");
+  const f2Med = recentF2.length >= MIN_RESONANCE_FRAMES ? median(recentF2) : null;
+  f2El.textContent = f2Med ? Math.round(f2Med) : "–";
+  f2El.style.color = !f2Med ? "" : f2Med >= settings.resGoal ? "var(--good)" : f2Med >= settings.resGoal - 100 ? "var(--gray)" : "var(--low)";
+  document.getElementById("inRange").textContent = voicedTotal ? Math.round(100 * voicedInRange / voicedTotal) + "%" : "–";
+  if (!paused) {
+    const cooling = now - lastCueAt < settings.cooldown;
+    setStatus(cooling ? "#ffe66b" : "#5fe39a", cooling ? `Cooldown ${Math.ceil(settings.cooldown - (now - lastCueAt))} s` : listeningText(now));
+  }
+  drawChart(now);
+  drawResonanceChart(now);
+}
+
+function drawResonanceChart(now) {
+  const c = document.getElementById("chart2"), g = c.getContext("2d");
+  const W = c.width, H = c.height, lo = 1000, hi = 2600;
+  const y = (hz) => H - (Math.min(hi, Math.max(lo, hz)) - lo) / (hi - lo) * H;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = "#b9a8e0"; g.font = "20px system-ui";
+  for (const hz of [1250, 1500, 1750, 2000, 2250]) {
+    g.fillRect(0, y(hz), W, 1);
+    g.fillText(hz + " Hz", 6, y(hz) - 4);
+  }
+  g.fillStyle = "#7ad9ff";
+  for (const f of formantFrames) g.fillRect(W - (now - f.t) / CHART_SECONDS * W, y(f.f2) - 3, 5, 5);
+}
+
+function drawChart(now) {
+  const c = document.getElementById("chart"), g = c.getContext("2d");
+  const W = c.width, H = c.height, lo = 80, hi = 260;
+  const y = (hz) => H - (Math.min(hi, Math.max(lo, hz)) - lo) / (hi - lo) * H;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = "#b9a8e0"; g.font = "20px system-ui";
+  for (const hz of [100, 150, 200, 250]) {
+    g.fillRect(0, y(hz), W, 1);
+    g.fillText(hz + " Hz", 6, y(hz) - 4);
+  }
+  g.strokeStyle = "#ffe66b"; g.setLineDash([12, 8]); g.lineWidth = 3;
+  g.beginPath(); g.moveTo(0, y(settings.threshold)); g.lineTo(W, y(settings.threshold)); g.stroke();
+  g.setLineDash([]);
+  chartPoints = chartPoints.filter((p) => now - p.t <= CHART_SECONDS);
+  for (const p of chartPoints) {
+    g.fillStyle = p.hz >= settings.threshold ? "#5fe39a" : "#ff7ad9";
+    g.fillRect(W - (now - p.t) / CHART_SECONDS * W, y(p.hz) - 3, 5, 5);
+  }
+}
+
+async function fillDeviceLists() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const fill = (sel, kind, chosen, defaultLabel) => {
+    sel.innerHTML = "";
+    sel.add(new Option(defaultLabel, ""));
+    for (const d of devices.filter((d) => d.kind === kind)) {
+      sel.add(new Option(d.label || d.deviceId.slice(0, 8), d.deviceId, false, d.deviceId === chosen));
+    }
+  };
+  fill(document.getElementById("micSel"), "audioinput", settings.mic, "Default mic");
+  fill(document.getElementById("outSel"), "audiooutput", settings.out, "Default output");
+  const count = (kind) => devices.filter((d) => d.kind === kind).length;
+  document.getElementById("deviceCount").textContent =
+    `Browser reports ${count("audioinput")} microphone(s) and ${count("audiooutput")} speaker(s). ` +
+    `Secure page: ${window.isSecureContext}. Speaker support: ${"setSinkId" in HTMLMediaElement.prototype}. ` +
+    `Speaker picker: ${"selectAudioOutput" in navigator.mediaDevices}. ${navigator.userAgent.match(/(Chrome|Firefox|Edg|OPR)\/[\d.]+/g)?.join(" ") ?? ""}`;
+  await applyOutput();
+}
+
+async function applyOutput() {
+  if (!cueAudio.setSinkId) return;
+  try { await cueAudio.setSinkId(settings.out || ""); }
+  catch (err) { setStatus("#ff5a5a", "Output device: " + err.message); }
+}
+
+function loadCue() {
+  cueAudio.src = settings.cue || DEFAULT_CUE;
+  document.getElementById("cueName").textContent =
+    settings.cue ? "Using your custom cue." : "Using the default chime.";
+}
+
+function bindSlider(id, format) {
+  const el = document.getElementById(id), out = document.getElementById(id + "Val");
+  el.value = settings[id];
+  out.textContent = format(settings[id]);
+  el.addEventListener("input", () => {
+    settings[id] = Number(el.value);
+    out.textContent = format(settings[id]);
+    saveSettings();
+  });
+}
+
+async function recordCue() {
+  if (!micStream) { setStatus("#ff5a5a", "Start listening first, then record"); return; }
+  const btn = document.getElementById("recBtn");
+  const rec = new MediaRecorder(micStream);
+  const chunks = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = () => {
+    const reader = new FileReader();
+    reader.onload = () => { settings.cue = reader.result; saveSettings(); loadCue(); playCue({ counts: false }); };
+    reader.readAsDataURL(new Blob(chunks, { type: rec.mimeType }));
+    btn.textContent = "Record my own (2 s)";
+  };
+  btn.textContent = "Recording…";
+  rec.start();
+  setTimeout(() => rec.stop(), 2000);
+}
+
+bindSlider("threshold", (v) => v + " Hz");
+bindSlider("resGoal", (v) => v + " Hz");
+bindSlider("need", (v) => v + " s");
+bindSlider("cooldown", (v) => v >= 60 ? `${Math.floor(v / 60)}m ${v % 60 ? (v % 60) + "s" : ""}` : v + " s");
+bindSlider("gate", (v) => String(v));
+loadCue();
+
+// Fill the lists on load too (names appear once the mic is allowed) and whenever a device is plugged in.
+navigator.mediaDevices.addEventListener("devicechange", () => fillDeviceLists().catch(() => {}));
+fillDeviceLists().catch(() => {});
+
+document.getElementById("startBtn").addEventListener("click", () => {
+  start().catch((err) => setStatus("#ff5a5a", `Could not start (${err.name}): ${err.message}`));
+});
+document.getElementById("pauseBtn").addEventListener("click", (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? "Resume" : "Pause";
+  if (paused) setStatus("#888", "Paused");
+});
+document.getElementById("testBtn").addEventListener("click", () => playCue({ counts: false }));
+document.getElementById("micSel").addEventListener("change", (e) => { settings.mic = e.target.value; saveSettings(); if (audioCtx) start(); });
+// If the speaker list is short, Chrome can ask the person to pick one directly.
+document.getElementById("pickSpeakerBtn").addEventListener("click", async () => {
+  if (!navigator.mediaDevices.selectAudioOutput) { setStatus(ERROR_COLOR, "This browser has no speaker picker"); return; }
+  try {
+    const chosen = await navigator.mediaDevices.selectAudioOutput();
+    settings.out = chosen.deviceId;
+    saveSettings();
+    await fillDeviceLists();
+  } catch (err) {
+    if (err.name !== "NotAllowedError") setStatus(ERROR_COLOR, `Speaker picker (${err.name}): ${err.message}`);
+  }
+});
+document.getElementById("outSel").addEventListener("change", (e) => { settings.out = e.target.value; saveSettings(); applyOutput(); });
+document.getElementById("recBtn").addEventListener("click", recordCue);
+document.getElementById("recFolderBtn").addEventListener("click", chooseFolderAndRecord);
+document.getElementById("recStopBtn").addEventListener("click", stopRecording);
+document.getElementById("resetCueBtn").addEventListener("click", () => { settings.cue = ""; saveSettings(); loadCue(); });
+document.getElementById("fileIn").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { settings.cue = reader.result; saveSettings(); loadCue(); };
+  reader.readAsDataURL(file);
+});
+setInterval(refreshNumbers, 250);
+</script>
+</body>
+</html>
