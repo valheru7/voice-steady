@@ -7,6 +7,8 @@ microphone, so you can analyze a whole session afterward.
 
 Everything runs in your browser. Audio is never uploaded.
 
+**Try it:** https://valheru7.github.io/voice-steady/
+
 ## Who it's for
 
 Anyone who wants to keep their voice in a chosen range without staring at a meter:
@@ -31,7 +33,7 @@ Anyone who wants to keep their voice in a chosen range without staring at a mete
 
 ## Use it
 
-1. Open `index.html` in Chrome or Edge. It works from a local file or any static host; there is no build step.
+1. Open https://valheru7.github.io/voice-steady/ in Chrome or Edge, or open `index.html` from a download. It works from a local file or any static host; there is no build step.
 2. Allow the microphone and press **Start listening**.
 3. Talk normally. Watch the big numbers (median pitch, median F2) and set the **threshold** and **resonance goal**
    to numbers that suit your own voice. Measure yourself first; a good threshold sits between your usual voice and your target.
